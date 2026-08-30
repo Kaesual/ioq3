@@ -243,6 +243,37 @@ static void GLSL_PrintLog(GLuint programOrShader, glslPrintLog_t type, qboolean 
 
 }
 
+/*
+GLSL ES needs an explicit default float precision, and this renderer needs the
+high one.  Its fragment stage works in world units -- the view vector is the
+difference of two map coordinates -- so squaring one overflows the 2^15 range
+that mediump is only required to reach, normalize() of such a vector then
+returns zero, and the 1e-8 specular epsilon underflows to zero as well, which
+turns a lit surface into a saturated white one.  Desktop GL ignores precision
+qualifiers entirely and always computes at 32 bits, which is why this only
+shows up on a GLES driver that honours them.
+
+The vertex stage already defaults to highp in GLSL ES, so an unconditional
+"precision mediump float" there was a downgrade.  In the fragment stage highp
+is guaranteed by GLSL ES 3.00 but optional in 1.00, so it stays guarded.
+*/
+static void GLSL_AddFloatPrecision( GLenum shaderType, char *dest, int size )
+{
+	if (shaderType == GL_VERTEX_SHADER)
+	{
+		Q_strcat(dest, size, "precision highp float;\n");
+	}
+	else
+	{
+		Q_strcat(dest, size,
+				 "#ifdef GL_FRAGMENT_PRECISION_HIGH\n"
+				 "precision highp float;\n"
+				 "#else\n"
+				 "precision mediump float;\n"
+				 "#endif\n");
+	}
+}
+
 static void GLSL_GetShaderHeader( GLenum shaderType, const GLchar *extra, char *dest, int size )
 {
 	float fbufWidthScale, fbufHeightScale;
@@ -267,7 +298,7 @@ static void GLSL_GetShaderHeader( GLenum shaderType, const GLchar *extra, char *
 
 		if (qglesMajorVersion >= 2)
 		{
-			Q_strcat(dest, size, "precision mediump float;\n");
+			GLSL_AddFloatPrecision(shaderType, dest, size);
 			Q_strcat(dest, size, "precision mediump sampler2DShadow;\n");
 		}
 
@@ -298,7 +329,7 @@ static void GLSL_GetShaderHeader( GLenum shaderType, const GLchar *extra, char *
 				Q_strcat(dest, size, extra);
 			}
 
-			Q_strcat(dest, size, "precision mediump float;\n");
+			GLSL_AddFloatPrecision(shaderType, dest, size);
 
 			if (glRefConfig.shadowSamplers)
 			{
