@@ -3084,7 +3084,10 @@ Com_Frame
 void Com_Frame( void ) {
 
 	int		msec, minMsec;
-	int		timeVal, timeValSV;
+	int		timeVal;
+#ifndef __EMSCRIPTEN__
+	int		timeValSV;
+#endif
 	static int	lastTime = 0, bias = 0;
  
 	int		timeBeforeFirstEvents;
@@ -3144,6 +3147,12 @@ void Com_Frame( void ) {
 	else
 		minMsec = 1;
 
+#ifdef __EMSCRIPTEN__
+	/* Browser animation frames own pacing; drain relay work exactly once. */
+	if(com_sv_running->integer)
+		SV_SendQueuedPackets();
+	NET_Sleep(0);
+#else
 	do
 	{
 		if(com_sv_running->integer)
@@ -3163,6 +3172,7 @@ void Com_Frame( void ) {
 		else
 			NET_Sleep(timeVal - 1);
 	} while(Com_TimeVal(minMsec));
+#endif
 	
 	IN_Frame();
 

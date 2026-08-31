@@ -1777,7 +1777,11 @@ void CL_Connect_f( void ) {
 	clc.connectPacketCount = 0;
 
 	// server connection string
+#ifdef __EMSCRIPTEN__
+	Cvar_Set( "cl_currentServerAddress", "relay destination" );
+#else
 	Cvar_Set( "cl_currentServerAddress", server );
+#endif
 }
 
 #define MAX_RCON_MESSAGE 1024
@@ -2436,8 +2440,8 @@ void CL_CheckForResend( void ) {
 		if ( strlen( data ) > 512 ) {
 			Com_Printf( "arena_net connect_refused reason=formatted_userinfo_limit "
 				"size=%d budget=512\n", (int)strlen( data ) );
-			clc.state = CA_DISCONNECTED;
-			return;
+			Com_Error( ERR_DROP,
+				"Connection data exceeds the relay-safe limit" );
 		}
 		NET_OutOfBandData( NS_CLIENT, clc.serverAddress, (byte *) data, strlen ( data ) );
 		// the most current userinfo has been sent, so watch for any

@@ -158,6 +158,7 @@ static int numIP;
 
 #define ARENA_INNER_DATAGRAM_FLOOR 768
 
+#if defined(__EMSCRIPTEN__) || defined(DEDICATED)
 typedef enum {
 	ARENA_PACKET_NETCHAN,
 	ARENA_PACKET_CONNECT,
@@ -235,6 +236,7 @@ static void NET_ArenaRefusal( netsrc_t sock, netpacketclass_t packetClass,
 		packetClass == NET_PACKET_ELICITED ? "elicited" : "originated",
 		NET_ArenaPacketKindName( kind ), reason, length, budget, count );
 }
+#endif
 
 #ifdef __EMSCRIPTEN__
 enum {
@@ -243,7 +245,8 @@ enum {
 	ARENA_SEND_DESTINATION = 2,
 	ARENA_SEND_UNAVAILABLE = 3,
 	ARENA_SEND_BUDGET = 4,
-	ARENA_SEND_CLOSED = 5
+	ARENA_SEND_CLOSED = 5,
+	ARENA_SEND_BACKPRESSURE = 6
 };
 
 EM_JS(int, ArenaWeb_SendPacket,
@@ -862,7 +865,8 @@ void Sys_SendPacket( netsrc_t sock, netpacketclass_t packetClass,
 		return;
 	}
 
-	result = ArenaWeb_SendPacket( to.type, to.ip, to.ip6, BigShort( to.port ),
+	result = ArenaWeb_SendPacket( to.type, to.ip, to.ip6,
+		(int)(unsigned short)BigShort( to.port ),
 		(int)to.scope_id, packetClass, length, data );
 	if ( result == ARENA_SEND_ACCEPTED ) {
 		arenaPinnedAddress = to;
@@ -875,6 +879,7 @@ void Sys_SendPacket( netsrc_t sock, netpacketclass_t packetClass,
 		case ARENA_SEND_DESTINATION: reason = "destination"; break;
 		case ARENA_SEND_BUDGET: reason = "path_budget"; break;
 		case ARENA_SEND_CLOSED: reason = "closed"; break;
+		case ARENA_SEND_BACKPRESSURE: reason = "backpressure"; break;
 		case ARENA_SEND_UNAVAILABLE:
 		default: reason = "unavailable"; break;
 	}
