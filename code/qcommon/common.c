@@ -3595,14 +3595,21 @@ fills string array with len random bytes, preferably from the OS randomizer
 */
 void Com_RandomBytes( byte *string, int len )
 {
+#ifndef __EMSCRIPTEN__
 	int i;
+#endif
 
 	if( Sys_RandomBytes( string, len ) )
 		return;
 
+#ifdef __EMSCRIPTEN__
+	Com_Error( ERR_FATAL,
+		"Com_RandomBytes: browser Web Crypto is unavailable" );
+#else
 	Com_Printf( "Com_RandomBytes: using weak randomization\n" );
 	for( i = 0; i < len; i++ )
 		string[i] = (unsigned char)( rand() % 256 );
+#endif
 }
 
 
