@@ -646,6 +646,13 @@ void SV_Init (void)
 	sv_minPing = Cvar_Get ("sv_minPing", "0", CVAR_ARCHIVE | CVAR_SERVERINFO );
 	sv_maxPing = Cvar_Get ("sv_maxPing", "0", CVAR_ARCHIVE | CVAR_SERVERINFO );
 	sv_floodProtect = Cvar_Get ("sv_floodProtect", "1", CVAR_ARCHIVE | CVAR_SERVERINFO );
+	sv_rateLimitPerPort = Cvar_Get ("sv_rateLimitPerPort", "0",
+		CVAR_ARCHIVE | CVAR_LATCH );
+	Cvar_CheckRange( sv_rateLimitPerPort, 0, 1, qtrue );
+	Cvar_SetDescription( sv_rateLimitPerPort,
+		"Include the UDP source port in connectionless rate-limit buckets. "
+		"Enable only behind a relay that assigns controlled live ports: arbitrary "
+		"Internet source ports can evade limits and exhaust the finite bucket pool." );
 
 	// systeminfo
 	Cvar_Get ("sv_cheats", "1", CVAR_SYSTEMINFO | CVAR_ROM );
@@ -780,4 +787,3 @@ void SV_Shutdown( char *finalmsg ) {
 	if( sv_killserver->integer != 2 )
 		CL_Disconnect( qfalse );
 }
-

@@ -58,6 +58,7 @@ cvar_t	*sv_gametype;
 cvar_t	*sv_pure;
 cvar_t	*sv_floodProtect;
 cvar_t	*sv_lanForceRate; // dedicated 1 (LAN) server forces local client rates to 99999 (bug #491)
+cvar_t	*sv_rateLimitPerPort;
 #ifndef STANDALONE
 cvar_t	*sv_strictAuth;
 #endif
@@ -388,6 +389,8 @@ static long SVC_HashForAddress( netadr_t address ) {
 	for ( i = 0; i < size; i++ ) {
 		hash += (long)( ip[ i ] ) * ( i + 119 );
 	}
+	if ( sv_rateLimitPerPort && sv_rateLimitPerPort->integer )
+		hash += (long)address.port * 211;
 
 	hash = ( hash ^ ( hash >> 10 ) ^ ( hash >> 20 ) );
 	hash &= ( MAX_HASHES - 1 );
@@ -409,6 +412,10 @@ static leakyBucket_t *SVC_BucketForAddress( netadr_t address, int burst, int per
 	int						now = Sys_Milliseconds();
 
 	for ( bucket = bucketHashes[ hash ]; bucket; bucket = bucket->next ) {
+		if ( sv_rateLimitPerPort && sv_rateLimitPerPort->integer &&
+			bucket->port != address.port )
+			continue;
+
 		switch ( bucket->type ) {
 			case NA_IP:
 				if ( memcmp( bucket->ipv._4, address.ip, 4 ) == 0 ) {
@@ -451,6 +458,8 @@ static leakyBucket_t *SVC_BucketForAddress( netadr_t address, int burst, int per
 
 		if ( bucket->type == NA_BAD ) {
 			bucket->type = address.type;
+			bucket->port = sv_rateLimitPerPort && sv_rateLimitPerPort->integer
+				? address.port : 0;
 			switch ( address.type ) {
 				case NA_IP:  Com_Memcpy( bucket->ipv._4, address.ip, 4 );   break;
 				case NA_IP6: Com_Memcpy( bucket->ipv._6, address.ip6, 16 ); break;

@@ -291,6 +291,7 @@ extern	cvar_t	*sv_gametype;
 extern	cvar_t	*sv_pure;
 extern	cvar_t	*sv_floodProtect;
 extern	cvar_t	*sv_lanForceRate;
+extern	cvar_t	*sv_rateLimitPerPort;
 #ifndef STANDALONE
 extern	cvar_t	*sv_strictAuth;
 #endif
@@ -313,6 +314,7 @@ extern	cvar_t	*sv_voipProtocol;
 typedef struct leakyBucket_s leakyBucket_t;
 struct leakyBucket_s {
 	netadrtype_t	type;
+	unsigned short	port;
 
 	union {
 		byte	_4[4];
