@@ -49,7 +49,13 @@ to the new value before sending out any replies.
 
 #define	MAX_PACKETLEN			1400		// max size of a network packet
 
-#define	FRAGMENT_SIZE			(MAX_PACKETLEN - 100)
+/*
+ * Browser relay profile protocol constant. Both endpoints infer the final
+ * fragment from fragmentLength < FRAGMENT_SIZE, so clients and servers must
+ * use the same value. 704 keeps every fragment below the arena-web WP6
+ * 768-byte inner-datagram floor, including the largest netchan header.
+ */
+#define	FRAGMENT_SIZE			704
 #define	PACKET_HEADER			10			// two ints and a short
 
 #define	FRAGMENT_BIT	(1U<<31)
