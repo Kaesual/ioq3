@@ -2652,9 +2652,16 @@ static void Com_InitRand(void)
 	unsigned int seed;
 
 	if(Sys_RandomBytes((byte *) &seed, sizeof(seed)))
+	{
 		srand(seed);
-	else
-		srand(time(NULL));
+		return;
+	}
+
+#ifdef __EMSCRIPTEN__
+	Com_Error(ERR_FATAL, "Com_InitRand: browser Web Crypto is unavailable");
+#else
+	srand(time(NULL));
+#endif
 }
 
 /*
