@@ -172,7 +172,18 @@ typedef enum {
 	ARENA_PACKET_CLASS_COUNT
 } arenaPacketKind_t;
 
-static unsigned long arenaRefusals[2][2][ARENA_PACKET_CLASS_COUNT];
+typedef enum {
+	ARENA_REFUSAL_DESTINATION,
+	ARENA_REFUSAL_OVERSIZE,
+	ARENA_REFUSAL_UNAVAILABLE,
+	ARENA_REFUSAL_PATH_BUDGET,
+	ARENA_REFUSAL_CLOSED,
+	ARENA_REFUSAL_BACKPRESSURE,
+	ARENA_REFUSAL_REASON_COUNT
+} arenaRefusalReason_t;
+
+static unsigned long arenaRefusals[2][2][ARENA_PACKET_CLASS_COUNT]
+	[ARENA_REFUSAL_REASON_COUNT];
 
 static arenaPacketKind_t NET_ArenaPacketKind( netpacketclass_t packetClass,
 	const void *data, int length )
@@ -217,8 +228,21 @@ static const char *NET_ArenaPacketKindName( arenaPacketKind_t kind )
 	return names[kind];
 }
 
+static const char *NET_ArenaRefusalReasonName( arenaRefusalReason_t reason )
+{
+	static const char *names[ARENA_REFUSAL_REASON_COUNT] = {
+		"destination", "oversize", "unavailable", "path_budget",
+		"closed", "backpressure"
+	};
+
+	if ( reason < ARENA_REFUSAL_DESTINATION ||
+		reason >= ARENA_REFUSAL_REASON_COUNT )
+		return "unavailable";
+	return names[reason];
+}
+
 static void NET_ArenaRefusal( netsrc_t sock, netpacketclass_t packetClass,
-	const void *data, const char *reason, int length, int budget )
+	const void *data, arenaRefusalReason_t reason, int length, int budget )
 {
 	arenaPacketKind_t kind;
 	unsigned long count;
@@ -229,12 +253,16 @@ static void NET_ArenaRefusal( netsrc_t sock, netpacketclass_t packetClass,
 		packetClass = NET_PACKET_ORIGINATED;
 
 	kind = NET_ArenaPacketKind( packetClass, data, length );
-	count = ++arenaRefusals[sock][packetClass][kind];
+	if ( reason < ARENA_REFUSAL_DESTINATION ||
+		reason >= ARENA_REFUSAL_REASON_COUNT )
+		reason = ARENA_REFUSAL_UNAVAILABLE;
+	count = ++arenaRefusals[sock][packetClass][kind][reason];
 	Com_Printf( "arena_net refusal direction=%s origin=%s class=%s reason=%s "
 		"size=%d budget=%d count=%lu\n",
 		sock == NS_CLIENT ? "client" : "server",
 		packetClass == NET_PACKET_ELICITED ? "elicited" : "originated",
-		NET_ArenaPacketKindName( kind ), reason, length, budget, count );
+		NET_ArenaPacketKindName( kind ), NET_ArenaRefusalReasonName( reason ),
+		length, budget, count );
 }
 #endif
 
@@ -281,15 +309,24 @@ EM_JS(int, ArenaWeb_ReceivePacket, (byte *data, int maxLength), {
 	}
 
 	try {
-		const payload = backend.receiveForEngine();
-		if (payload === null || payload === undefined) {
-			return 0;
+		for (let attempts = 0; attempts < 256; attempts += 1) {
+			const payload = backend.receiveForEngine();
+			if (payload === null || payload === undefined) {
+				return 0;
+			}
+			if (!(payload instanceof Uint8Array)) {
+				backend.refuseReceivedForEngine?.("invalid_payload");
+				continue;
+			}
+			if (payload.byteLength >= maxLength) {
+				backend.refuseReceivedForEngine?.("engine_capacity");
+				continue;
+			}
+			HEAPU8.set(payload, data);
+			return payload.byteLength + 1;
 		}
-		if (!(payload instanceof Uint8Array) || payload.byteLength >= maxLength) {
-			return -1;
-		}
-		HEAPU8.set(payload, data);
-		return payload.byteLength + 1;
+		backend.refuseReceivedForEngine?.("poll_limit");
+		return 0;
 	} catch (_) {
 		return -1;
 	}
@@ -856,11 +893,12 @@ void Sys_SendPacket( netsrc_t sock, netpacketclass_t packetClass,
 	int length, const void *data, netadr_t to ) {
 #ifdef __EMSCRIPTEN__
 	int result;
-	const char *reason;
+	arenaRefusalReason_t reason;
 
 	if( to.type != NA_IP && to.type != NA_IP6 )
 	{
-		NET_ArenaRefusal( sock, packetClass, data, "destination", length,
+		NET_ArenaRefusal( sock, packetClass, data,
+			ARENA_REFUSAL_DESTINATION, length,
 			ARENA_INNER_DATAGRAM_FLOOR );
 		return;
 	}
@@ -875,13 +913,13 @@ void Sys_SendPacket( netsrc_t sock, netpacketclass_t packetClass,
 	}
 
 	switch ( result ) {
-		case ARENA_SEND_OVERSIZE: reason = "oversize"; break;
-		case ARENA_SEND_DESTINATION: reason = "destination"; break;
-		case ARENA_SEND_BUDGET: reason = "path_budget"; break;
-		case ARENA_SEND_CLOSED: reason = "closed"; break;
-		case ARENA_SEND_BACKPRESSURE: reason = "backpressure"; break;
+		case ARENA_SEND_OVERSIZE: reason = ARENA_REFUSAL_OVERSIZE; break;
+		case ARENA_SEND_DESTINATION: reason = ARENA_REFUSAL_DESTINATION; break;
+		case ARENA_SEND_BUDGET: reason = ARENA_REFUSAL_PATH_BUDGET; break;
+		case ARENA_SEND_CLOSED: reason = ARENA_REFUSAL_CLOSED; break;
+		case ARENA_SEND_BACKPRESSURE: reason = ARENA_REFUSAL_BACKPRESSURE; break;
 		case ARENA_SEND_UNAVAILABLE:
-		default: reason = "unavailable"; break;
+		default: reason = ARENA_REFUSAL_UNAVAILABLE; break;
 	}
 	NET_ArenaRefusal( sock, packetClass, data, reason, length,
 		ArenaWeb_CurrentBudget() );
@@ -892,7 +930,8 @@ void Sys_SendPacket( netsrc_t sock, netpacketclass_t packetClass,
 
 #ifdef DEDICATED
 	if ( sock == NS_SERVER && length > ARENA_INNER_DATAGRAM_FLOOR ) {
-		NET_ArenaRefusal( sock, packetClass, data, "oversize", length,
+		NET_ArenaRefusal( sock, packetClass, data,
+			ARENA_REFUSAL_OVERSIZE, length,
 			ARENA_INNER_DATAGRAM_FLOOR );
 		return;
 	}

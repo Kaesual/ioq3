@@ -3752,12 +3752,13 @@ void CL_Init( void ) {
 #ifdef __EMSCRIPTEN__
 	Cmd_AddCommand ("localservers", CL_RelayBrowserCommand_f);
 	Cmd_AddCommand ("globalservers", CL_RelayBrowserCommand_f);
+	Cmd_AddCommand ("rcon", CL_RelayBrowserCommand_f);
 #else
 	Cmd_AddCommand ("localservers", CL_LocalServers_f);
 	Cmd_AddCommand ("globalservers", CL_GlobalServers_f);
-#endif
 	Cmd_AddCommand ("rcon", CL_Rcon_f);
 	Cmd_SetCommandCompletionFunc( "rcon", CL_CompleteRcon );
+#endif
 #ifdef __EMSCRIPTEN__
 	Cmd_AddCommand ("ping", CL_RelayBrowserCommand_f );
 	Cmd_AddCommand ("serverstatus", CL_RelayBrowserCommand_f );
