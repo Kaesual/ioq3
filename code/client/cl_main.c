@@ -1749,7 +1749,11 @@ void CL_Connect_f( void ) {
 
 	serverString = NET_AdrToStringwPort(clc.serverAddress);
 
+#ifdef __EMSCRIPTEN__
+	Com_Printf( "Relay destination resolved\n" );
+#else
 	Com_Printf( "%s resolved to %s\n", clc.servername, serverString);
+#endif
 
 	if( cl_guidServerUniq->integer )
 		CL_UpdateGUID( serverString, strlen( serverString ) );
@@ -2067,7 +2071,11 @@ CL_Clientinfo_f
 void CL_Clientinfo_f( void ) {
 	Com_Printf( "--------- Client Information ---------\n" );
 	Com_Printf( "state: %i\n", clc.state );
+#ifdef __EMSCRIPTEN__
+	Com_Printf( "Server: [relay destination]\n" );
+#else
 	Com_Printf( "Server: %s\n", clc.servername );
+#endif
 	Com_Printf ("User info settings:\n");
 	Info_Print( Cvar_InfoString( CVAR_USERINFO ) );
 	Com_Printf( "--------------------------------------\n" );
@@ -2425,6 +2433,12 @@ void CL_CheckForResend( void ) {
 		Info_SetValueForKey( info, "challenge", va("%i", clc.challenge ) );
 		
 		Com_sprintf( data, sizeof(data), "connect \"%s\"", info );
+		if ( strlen( data ) > 512 ) {
+			Com_Printf( "arena_net connect_refused reason=formatted_userinfo_limit "
+				"size=%d budget=512\n", (int)strlen( data ) );
+			clc.state = CA_DISCONNECTED;
+			return;
+		}
 		NET_OutOfBandData( NS_CLIENT, clc.serverAddress, (byte *) data, strlen ( data ) );
 		// the most current userinfo has been sent, so watch for any
 		// newer changes to userinfo variables
@@ -2785,7 +2799,7 @@ void CL_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 	if ( !Q_stricmp(c, "echo") ) {
 		// NOTE: we may have to add exceptions for auth and update servers
 		if ( NET_CompareAdr( from, clc.serverAddress ) || NET_CompareAdr( from, cls.rconAddress ) ) {
-			NET_OutOfBandPrint( NS_CLIENT, from, "%s", Cmd_Argv(1) );
+			NET_OutOfBandPrintElicited( NS_CLIENT, from, "%s", Cmd_Argv(1) );
 		}
 		return;
 	}
@@ -3538,6 +3552,12 @@ void CL_Sayto_f( void ) {
 CL_Init
 ====================
 */
+#ifdef __EMSCRIPTEN__
+static void CL_RelayBrowserCommand_f( void ) {
+	Com_Printf( "Server-browser commands are disabled for relay sessions.\n" );
+}
+#endif
+
 void CL_Init( void ) {
 	Com_Printf( "----- Client Initialization -----\n" );
 
@@ -3725,12 +3745,22 @@ void CL_Init( void ) {
 	Cmd_AddCommand ("stoprecord", CL_StopRecord_f);
 	Cmd_AddCommand ("connect", CL_Connect_f);
 	Cmd_AddCommand ("reconnect", CL_Reconnect_f);
+#ifdef __EMSCRIPTEN__
+	Cmd_AddCommand ("localservers", CL_RelayBrowserCommand_f);
+	Cmd_AddCommand ("globalservers", CL_RelayBrowserCommand_f);
+#else
 	Cmd_AddCommand ("localservers", CL_LocalServers_f);
 	Cmd_AddCommand ("globalservers", CL_GlobalServers_f);
+#endif
 	Cmd_AddCommand ("rcon", CL_Rcon_f);
 	Cmd_SetCommandCompletionFunc( "rcon", CL_CompleteRcon );
+#ifdef __EMSCRIPTEN__
+	Cmd_AddCommand ("ping", CL_RelayBrowserCommand_f );
+	Cmd_AddCommand ("serverstatus", CL_RelayBrowserCommand_f );
+#else
 	Cmd_AddCommand ("ping", CL_Ping_f );
 	Cmd_AddCommand ("serverstatus", CL_ServerStatus_f );
+#endif
 	Cmd_AddCommand ("showip", CL_ShowIP_f );
 	Cmd_AddCommand ("fs_openedList", CL_OpenedPK3List_f );
 	Cmd_AddCommand ("fs_referencedList", CL_ReferencedPK3List_f );
@@ -4024,6 +4054,13 @@ int CL_ServerStatus( char *serverAddress, char *serverStatusString, int maxLen )
 	int i;
 	netadr_t	to;
 	serverStatus_t *serverStatus;
+
+#ifdef __EMSCRIPTEN__
+	(void)serverAddress;
+	if ( serverStatusString && maxLen > 0 )
+		serverStatusString[0] = '\0';
+	return qfalse;
+#endif
 
 	// if no server address then reset all server status requests
 	if ( !serverAddress ) {
@@ -4533,6 +4570,11 @@ qboolean CL_UpdateVisiblePings_f(int source) {
 	int			pingTime;
 	int			max;
 	qboolean status = qfalse;
+
+#ifdef __EMSCRIPTEN__
+	(void)source;
+	return qfalse;
+#endif
 
 	if (source < 0 || source > AS_FAVORITES) {
 		return qfalse;

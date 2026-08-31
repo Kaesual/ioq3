@@ -42,6 +42,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include <time.h>
 #include <sys/resource.h>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#endif
+
 qboolean stdinIsATTY;
 
 static char execBuffer[ 1024 ];
@@ -551,6 +555,26 @@ Sys_RandomBytes
 */
 qboolean Sys_RandomBytes( byte *string, int len )
 {
+#ifdef __EMSCRIPTEN__
+	return EM_ASM_INT({
+		const output = HEAPU8.subarray($0, $0 + $1);
+		const cryptoProvider = globalThis.crypto;
+		if (!cryptoProvider || typeof cryptoProvider.getRandomValues !== "function") {
+			return 0;
+		}
+
+		try {
+			for (let offset = 0; offset < output.byteLength; offset += 65536) {
+				cryptoProvider.getRandomValues(
+					output.subarray(offset, Math.min(offset + 65536, output.byteLength))
+				);
+			}
+			return 1;
+		} catch (_) {
+			return 0;
+		}
+	}, string, len) ? qtrue : qfalse;
+#else
 	FILE *fp;
 
 	fp = fopen( "/dev/urandom", "r" );
@@ -567,6 +591,7 @@ qboolean Sys_RandomBytes( byte *string, int len )
 
 	fclose( fp );
 	return qtrue;
+#endif
 }
 
 /*

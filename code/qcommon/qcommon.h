@@ -148,6 +148,11 @@ typedef enum {
 	NS_SERVER
 } netsrc_t;
 
+typedef enum {
+	NET_PACKET_ORIGINATED,
+	NET_PACKET_ELICITED
+} netpacketclass_t;
+
 #define NET_ADDRSTRMAXLEN 48	// maximum length of an IPv6 address string including trailing '\0'
 typedef struct {
 	netadrtype_t	type;
@@ -166,6 +171,7 @@ void		NET_Config( qboolean enableNetworking );
 void		NET_FlushPacketQueue(void);
 void		NET_SendPacket (netsrc_t sock, int length, const void *data, netadr_t to);
 void		QDECL NET_OutOfBandPrint( netsrc_t net_socket, netadr_t adr, const char *format, ...) Q_PRINTF_FUNC(3, 4);
+void		QDECL NET_OutOfBandPrintElicited( netsrc_t net_socket, netadr_t adr, const char *format, ...) Q_PRINTF_FUNC(3, 4);
 void		QDECL NET_OutOfBandData( netsrc_t sock, netadr_t adr, byte *format, int len );
 
 qboolean	NET_CompareAdr (netadr_t a, netadr_t b);
@@ -1104,7 +1110,8 @@ cpuFeatures_t Sys_GetProcessorFeatures( void );
 
 void	Sys_SetErrorText( const char *text );
 
-void	Sys_SendPacket( int length, const void *data, netadr_t to );
+void	Sys_SendPacket( netsrc_t sock, netpacketclass_t packetClass,
+		int length, const void *data, netadr_t to );
 
 qboolean	Sys_StringToAdr( const char *s, netadr_t *a, netadrtype_t family );
 //Does NOT parse port numbers, only base addresses.

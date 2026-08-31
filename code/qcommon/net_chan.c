@@ -485,6 +485,8 @@ void NET_SendLoopPacket (netsrc_t sock, int length, const void *data, netadr_t t
 
 typedef struct packetQueue_s {
         struct packetQueue_s *next;
+		netsrc_t sock;
+		netpacketclass_t packetClass;
         int length;
         byte *data;
         netadr_t to;
@@ -493,8 +495,8 @@ typedef struct packetQueue_s {
 
 packetQueue_t *packetQueue = NULL;
 
-static void NET_QueuePacket( int length, const void *data, netadr_t to,
-	int offset )
+static void NET_QueuePacket( netsrc_t sock, netpacketclass_t packetClass,
+	int length, const void *data, netadr_t to, int offset )
 {
 	packetQueue_t *new, *next = packetQueue;
 
@@ -504,6 +506,8 @@ static void NET_QueuePacket( int length, const void *data, netadr_t to,
 	new = S_Malloc(sizeof(packetQueue_t));
 	new->data = S_Malloc(length);
 	Com_Memcpy(new->data, data, length);
+	new->sock = sock;
+	new->packetClass = packetClass;
 	new->length = length;
 	new->to = to;
 	new->release = Sys_Milliseconds() + (int)((float)offset / com_timescale->value);	
@@ -531,8 +535,8 @@ void NET_FlushPacketQueue(void)
 		now = Sys_Milliseconds();
 		if(packetQueue->release >= now)
 			break;
-		Sys_SendPacket(packetQueue->length, packetQueue->data,
-			packetQueue->to);
+		Sys_SendPacket(packetQueue->sock, packetQueue->packetClass,
+			packetQueue->length, packetQueue->data, packetQueue->to);
 		last = packetQueue;
 		packetQueue = packetQueue->next;
 		Z_Free(last->data);
@@ -540,7 +544,8 @@ void NET_FlushPacketQueue(void)
 	}
 }
 
-void NET_SendPacket( netsrc_t sock, int length, const void *data, netadr_t to ) {
+static void NET_SendPacketClass( netsrc_t sock, netpacketclass_t packetClass,
+	int length, const void *data, netadr_t to ) {
 
 	// sequenced packets are shown in netchan, so just show oob
 	if ( showpackets->integer && *(int *)data == -1 )	{
@@ -559,14 +564,20 @@ void NET_SendPacket( netsrc_t sock, int length, const void *data, netadr_t to ) 
 	}
 
 	if ( sock == NS_CLIENT && cl_packetdelay->integer > 0 ) {
-		NET_QueuePacket( length, data, to, cl_packetdelay->integer );
+		NET_QueuePacket( sock, packetClass, length, data, to,
+			cl_packetdelay->integer );
 	}
 	else if ( sock == NS_SERVER && sv_packetdelay->integer > 0 ) {
-		NET_QueuePacket( length, data, to, sv_packetdelay->integer );
+		NET_QueuePacket( sock, packetClass, length, data, to,
+			sv_packetdelay->integer );
 	}
 	else {
-		Sys_SendPacket( length, data, to );
+		Sys_SendPacket( sock, packetClass, length, data, to );
 	}
+}
+
+void NET_SendPacket( netsrc_t sock, int length, const void *data, netadr_t to ) {
+	NET_SendPacketClass( sock, NET_PACKET_ORIGINATED, length, data, to );
 }
 
 /*
@@ -576,8 +587,12 @@ NET_OutOfBandPrint
 Sends a text message in an out-of-band datagram
 ================
 */
-void QDECL NET_OutOfBandPrint( netsrc_t sock, netadr_t adr, const char *format, ... ) {
-	va_list		argptr;
+static void NET_OutOfBandPrintV( netsrc_t sock, netadr_t adr,
+	netpacketclass_t packetClass, const char *format, va_list argptr )
+	Q_PRINTF_FUNC(4, 0);
+
+static void NET_OutOfBandPrintV( netsrc_t sock, netadr_t adr,
+	netpacketclass_t packetClass, const char *format, va_list argptr ) {
 	char		string[MAX_MSGLEN];
 
 
@@ -587,12 +602,27 @@ void QDECL NET_OutOfBandPrint( netsrc_t sock, netadr_t adr, const char *format, 
 	string[2] = -1;
 	string[3] = -1;
 
-	va_start( argptr, format );
 	Q_vsnprintf( string+4, sizeof(string)-4, format, argptr );
-	va_end( argptr );
 
 	// send the datagram
-	NET_SendPacket( sock, strlen( string ), string, adr );
+	NET_SendPacketClass( sock, packetClass, strlen( string ), string, adr );
+}
+
+void QDECL NET_OutOfBandPrint( netsrc_t sock, netadr_t adr, const char *format, ... ) {
+	va_list		argptr;
+
+	va_start( argptr, format );
+	NET_OutOfBandPrintV( sock, adr, NET_PACKET_ORIGINATED, format, argptr );
+	va_end( argptr );
+}
+
+void QDECL NET_OutOfBandPrintElicited( netsrc_t sock, netadr_t adr,
+	const char *format, ... ) {
+	va_list		argptr;
+
+	va_start( argptr, format );
+	NET_OutOfBandPrintV( sock, adr, NET_PACKET_ELICITED, format, argptr );
+	va_end( argptr );
 }
 
 /*

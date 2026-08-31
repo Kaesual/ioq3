@@ -23,6 +23,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "../qcommon/q_shared.h"
 #include "../qcommon/qcommon.h"
 
+#ifdef __EMSCRIPTEN__
+#	include <emscripten/emscripten.h>
+#endif
+
 #ifdef _WIN32
 #	include <winsock2.h>
 #	include <ws2tcpip.h>
@@ -151,6 +155,169 @@ typedef struct
 
 static nip_localaddr_t localIP[MAX_IPS];
 static int numIP;
+
+#define ARENA_INNER_DATAGRAM_FLOOR 768
+
+typedef enum {
+	ARENA_PACKET_NETCHAN,
+	ARENA_PACKET_CONNECT,
+	ARENA_PACKET_CHALLENGE,
+	ARENA_PACKET_STATUS,
+	ARENA_PACKET_INFO,
+	ARENA_PACKET_PRINT,
+	ARENA_PACKET_RCON,
+	ARENA_PACKET_ECHO,
+	ARENA_PACKET_OTHER_OOB,
+	ARENA_PACKET_CLASS_COUNT
+} arenaPacketKind_t;
+
+static unsigned long arenaRefusals[2][2][ARENA_PACKET_CLASS_COUNT];
+
+static arenaPacketKind_t NET_ArenaPacketKind( netpacketclass_t packetClass,
+	const void *data, int length )
+{
+	const byte *bytes = data;
+	const char *command;
+	int commandLength;
+
+	if ( packetClass == NET_PACKET_ELICITED )
+		return ARENA_PACKET_ECHO;
+	if ( length < 4 || bytes[0] != 0xff || bytes[1] != 0xff ||
+		bytes[2] != 0xff || bytes[3] != 0xff )
+		return ARENA_PACKET_NETCHAN;
+
+	command = (const char *)bytes + 4;
+	commandLength = length - 4;
+#define ARENA_COMMAND(name, kind) \
+	if ( commandLength >= (int)sizeof(name) - 1 && \
+		!memcmp( command, name, sizeof(name) - 1 ) ) return kind
+	ARENA_COMMAND( "connect ", ARENA_PACKET_CONNECT );
+	ARENA_COMMAND( "getchallenge", ARENA_PACKET_CHALLENGE );
+	ARENA_COMMAND( "challengeResponse", ARENA_PACKET_CHALLENGE );
+	ARENA_COMMAND( "getstatus", ARENA_PACKET_STATUS );
+	ARENA_COMMAND( "statusResponse", ARENA_PACKET_STATUS );
+	ARENA_COMMAND( "getinfo", ARENA_PACKET_INFO );
+	ARENA_COMMAND( "infoResponse", ARENA_PACKET_INFO );
+	ARENA_COMMAND( "print", ARENA_PACKET_PRINT );
+	ARENA_COMMAND( "rcon", ARENA_PACKET_RCON );
+#undef ARENA_COMMAND
+	return ARENA_PACKET_OTHER_OOB;
+}
+
+static const char *NET_ArenaPacketKindName( arenaPacketKind_t kind )
+{
+	static const char *names[ARENA_PACKET_CLASS_COUNT] = {
+		"netchan", "connect", "challenge", "status", "info", "print",
+		"rcon", "echo", "other_oob"
+	};
+
+	if ( kind < ARENA_PACKET_NETCHAN || kind >= ARENA_PACKET_CLASS_COUNT )
+		return "other_oob";
+	return names[kind];
+}
+
+static void NET_ArenaRefusal( netsrc_t sock, netpacketclass_t packetClass,
+	const void *data, const char *reason, int length, int budget )
+{
+	arenaPacketKind_t kind;
+	unsigned long count;
+
+	if ( sock < NS_CLIENT || sock > NS_SERVER )
+		sock = NS_CLIENT;
+	if ( packetClass < NET_PACKET_ORIGINATED || packetClass > NET_PACKET_ELICITED )
+		packetClass = NET_PACKET_ORIGINATED;
+
+	kind = NET_ArenaPacketKind( packetClass, data, length );
+	count = ++arenaRefusals[sock][packetClass][kind];
+	Com_Printf( "arena_net refusal direction=%s origin=%s class=%s reason=%s "
+		"size=%d budget=%d count=%lu\n",
+		sock == NS_CLIENT ? "client" : "server",
+		packetClass == NET_PACKET_ELICITED ? "elicited" : "originated",
+		NET_ArenaPacketKindName( kind ), reason, length, budget, count );
+}
+
+#ifdef __EMSCRIPTEN__
+enum {
+	ARENA_SEND_ACCEPTED = 0,
+	ARENA_SEND_OVERSIZE = 1,
+	ARENA_SEND_DESTINATION = 2,
+	ARENA_SEND_UNAVAILABLE = 3,
+	ARENA_SEND_BUDGET = 4,
+	ARENA_SEND_CLOSED = 5
+};
+
+EM_JS(int, ArenaWeb_SendPacket,
+	(int type, const byte *ip4, const byte *ip6, int port, int scopeId,
+	 int packetClass, int length, const byte *data), {
+	const backend = Module.arenaNetwork;
+	if (!backend || typeof backend.sendFromEngine !== "function") {
+		return 3;
+	}
+
+	const address = {
+		type,
+		port,
+		scopeId,
+		ipv4: Array.from(HEAPU8.subarray(ip4, ip4 + 4)),
+		ipv6: Array.from(HEAPU8.subarray(ip6, ip6 + 16)),
+	};
+	const payload = HEAPU8.slice(data, data + length);
+
+	try {
+		const result = backend.sendFromEngine(address, payload, packetClass);
+		return Number.isInteger(result) ? result : 3;
+	} catch (_) {
+		return 3;
+	}
+});
+
+EM_JS(int, ArenaWeb_ReceivePacket, (byte *data, int maxLength), {
+	const backend = Module.arenaNetwork;
+	if (!backend || typeof backend.receiveForEngine !== "function") {
+		return 0;
+	}
+
+	try {
+		const payload = backend.receiveForEngine();
+		if (payload === null || payload === undefined) {
+			return 0;
+		}
+		if (!(payload instanceof Uint8Array) || payload.byteLength >= maxLength) {
+			return -1;
+		}
+		HEAPU8.set(payload, data);
+		return payload.byteLength + 1;
+	} catch (_) {
+		return -1;
+	}
+});
+
+EM_JS(int, ArenaWeb_CurrentBudget, (void), {
+	const backend = Module.arenaNetwork;
+	if (!backend || typeof backend.currentInnerBudget !== "function") {
+		return 0;
+	}
+	try {
+		return backend.currentInnerBudget() | 0;
+	} catch (_) {
+		return 0;
+	}
+});
+
+EM_JS(void, ArenaWeb_Shutdown, (void), {
+	const backend = Module.arenaNetwork;
+	if (backend && typeof backend.closeFromEngine === "function") {
+		try {
+			backend.closeFromEngine();
+		} catch (_) {
+			// Shutdown is best effort; the backend records the terminal state.
+		}
+	}
+});
+
+static netadr_t arenaPinnedAddress;
+static qboolean arenaHasPinnedAddress = qfalse;
+#endif
 
 
 //=============================================================================
@@ -464,6 +631,13 @@ const char	*NET_AdrToString (netadr_t a)
 {
 	static	char	s[NET_ADDRSTRMAXLEN];
 
+#ifdef __EMSCRIPTEN__
+	if (a.type == NA_IP || a.type == NA_IP6) {
+		Com_sprintf (s, sizeof(s), "[relay destination]");
+		return s;
+	}
+#endif
+
 	if (a.type == NA_LOOPBACK)
 		Com_sprintf (s, sizeof(s), "loopback");
 	else if (a.type == NA_BOT)
@@ -483,6 +657,13 @@ const char	*NET_AdrToString (netadr_t a)
 const char	*NET_AdrToStringwPort (netadr_t a)
 {
 	static	char	s[NET_ADDRSTRMAXLEN];
+
+#ifdef __EMSCRIPTEN__
+	if (a.type == NA_IP || a.type == NA_IP6) {
+		Com_sprintf (s, sizeof(s), "[relay destination]");
+		return s;
+	}
+#endif
 
 	if (a.type == NA_LOOPBACK)
 		Com_sprintf (s, sizeof(s), "loopback");
@@ -529,6 +710,26 @@ Receive one packet
 */
 qboolean NET_GetPacket(netadr_t *net_from, msg_t *net_message, fd_set *fdr)
 {
+#ifdef __EMSCRIPTEN__
+	int ret;
+
+	(void)fdr;
+	if ( !arenaHasPinnedAddress )
+		return qfalse;
+
+	ret = ArenaWeb_ReceivePacket( net_message->data, net_message->maxsize );
+	if ( ret < 0 ) {
+		Com_Printf( "arena_net receive_error reason=invalid_payload\n" );
+		return qfalse;
+	}
+	if ( ret == 0 )
+		return qfalse;
+
+	*net_from = arenaPinnedAddress;
+	net_message->readcount = 0;
+	net_message->cursize = ret - 1;
+	return qtrue;
+#else
 	int 	ret;
 	struct sockaddr_storage from;
 	socklen_t	fromlen;
@@ -636,6 +837,7 @@ qboolean NET_GetPacket(netadr_t *net_from, msg_t *net_message, fd_set *fdr)
 	
 	
 	return qfalse;
+#endif
 }
 
 //=============================================================================
@@ -647,9 +849,52 @@ static char socksBuf[4096];
 Sys_SendPacket
 ==================
 */
-void Sys_SendPacket( int length, const void *data, netadr_t to ) {
+void Sys_SendPacket( netsrc_t sock, netpacketclass_t packetClass,
+	int length, const void *data, netadr_t to ) {
+#ifdef __EMSCRIPTEN__
+	int result;
+	const char *reason;
+
+	if( to.type != NA_IP && to.type != NA_IP6 )
+	{
+		NET_ArenaRefusal( sock, packetClass, data, "destination", length,
+			ARENA_INNER_DATAGRAM_FLOOR );
+		return;
+	}
+
+	result = ArenaWeb_SendPacket( to.type, to.ip, to.ip6, BigShort( to.port ),
+		(int)to.scope_id, packetClass, length, data );
+	if ( result == ARENA_SEND_ACCEPTED ) {
+		arenaPinnedAddress = to;
+		arenaHasPinnedAddress = qtrue;
+		return;
+	}
+
+	switch ( result ) {
+		case ARENA_SEND_OVERSIZE: reason = "oversize"; break;
+		case ARENA_SEND_DESTINATION: reason = "destination"; break;
+		case ARENA_SEND_BUDGET: reason = "path_budget"; break;
+		case ARENA_SEND_CLOSED: reason = "closed"; break;
+		case ARENA_SEND_UNAVAILABLE:
+		default: reason = "unavailable"; break;
+	}
+	NET_ArenaRefusal( sock, packetClass, data, reason, length,
+		ArenaWeb_CurrentBudget() );
+	return;
+#else
 	int				ret = SOCKET_ERROR;
 	struct sockaddr_storage	addr;
+
+#ifdef DEDICATED
+	if ( sock == NS_SERVER && length > ARENA_INNER_DATAGRAM_FLOOR ) {
+		NET_ArenaRefusal( sock, packetClass, data, "oversize", length,
+			ARENA_INNER_DATAGRAM_FLOOR );
+		return;
+	}
+#else
+	(void)sock;
+	(void)packetClass;
+#endif
 
 	if( to.type != NA_BROADCAST && to.type != NA_IP && to.type != NA_IP6 && to.type != NA_MULTICAST6)
 	{
@@ -700,6 +945,7 @@ void Sys_SendPacket( int length, const void *data, netadr_t to ) {
 
 		Com_Printf( "Sys_SendPacket: %s\n", NET_ErrorString() );
 	}
+#endif
 }
 
 
@@ -1565,8 +1811,12 @@ void NET_Config( qboolean enableNetworking ) {
 	{
 		if (net_enabled->integer)
 		{
+#ifdef __EMSCRIPTEN__
+			/* The product backend owns WebTransport; no POSIX socket is opened. */
+#else
 			NET_OpenIP();
 			NET_SetMulticast6();
+#endif
 		}
 	}
 }
@@ -1608,6 +1858,11 @@ void NET_Shutdown( void ) {
 	}
 
 	NET_Config( qfalse );
+
+#ifdef __EMSCRIPTEN__
+	ArenaWeb_Shutdown();
+	arenaHasPinnedAddress = qfalse;
+#endif
 
 #ifdef _WIN32
 	WSACleanup();
@@ -1661,6 +1916,10 @@ Sleeps msec or until something happens on the network
 */
 void NET_Sleep(int msec)
 {
+#ifdef __EMSCRIPTEN__
+	(void)msec;
+	NET_Event( NULL );
+#else
 	struct timeval timeout;
 	fd_set fdr;
 	int retval;
@@ -1703,6 +1962,7 @@ void NET_Sleep(int msec)
 		Com_Printf("Warning: select() syscall failed: %s\n", NET_ErrorString());
 	else if(retval > 0)
 		NET_Event(&fdr);
+#endif
 }
 
 /*
