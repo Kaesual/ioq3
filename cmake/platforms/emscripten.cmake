@@ -18,8 +18,17 @@ set(USE_HTTP OFF CACHE INTERNAL "")
 # Disable LTO since the libraries Emscripten provides aren't LTO enabled
 set(CMAKE_INTERPROCEDURAL_OPTIMIZATION FALSE)
 
+# The browser client starts at the fixed figure the prototype was accepted on
+# and is allowed to grow from there, rather than committing a larger fixed
+# heap on every device. Without ALLOW_MEMORY_GROWTH the shipped module carries
+# abortOnCannotGrowMemory, so exceeding the initial size ends the engine; with
+# it, a heavier content set costs memory only on the machines that load one.
+# MAXIMUM_MEMORY is Emscripten's own default under growth and the conservative,
+# broadly supported ceiling for a 32-bit wasm heap.
 list(APPEND CLIENT_LINK_OPTIONS
-    -sTOTAL_MEMORY=256MB
+    -sINITIAL_MEMORY=256MB
+    -sALLOW_MEMORY_GROWTH=1
+    -sMAXIMUM_MEMORY=2GB
     -sSTACK_SIZE=5MB
     -sMIN_WEBGL_VERSION=1
     -sMAX_WEBGL_VERSION=2
