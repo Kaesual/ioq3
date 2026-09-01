@@ -74,6 +74,12 @@ static void Sys_WebMainLoop( void )
 	if( webQuitRequested )
 	{
 		webQuitRequested = qfalse;
+		/*
+		 * emscripten_set_main_loop retains the JavaScript runtime.  Drop that
+		 * keepalive before the normal exit path, otherwise exit(0) returns from
+		 * this callback without delivering Module.onExit to the embedding host.
+		 */
+		emscripten_cancel_main_loop();
 		Com_Quit_f();
 	}
 
