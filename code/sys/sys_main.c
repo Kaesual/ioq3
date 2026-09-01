@@ -54,6 +54,33 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 static char binaryPath[ MAX_OSPATH ] = { 0 };
 static char installPath[ MAX_OSPATH ] = { 0 };
 
+#ifdef __EMSCRIPTEN__
+/*
+ * The product loader needs one honest host-owned stop operation.  Calling the
+ * normal shutdown directly from an Emscripten callback would be unsafe before
+ * Com_Init has completed, so the exported function only records the request.
+ * The main-loop wrapper below consumes it on the engine thread and uses
+ * Com_Quit_f, the same complete shutdown path as the console's quit command.
+ */
+static qboolean webQuitRequested = qfalse;
+
+EMSCRIPTEN_KEEPALIVE void Web_RequestQuit( void )
+{
+	webQuitRequested = qtrue;
+}
+
+static void Sys_WebMainLoop( void )
+{
+	if( webQuitRequested )
+	{
+		webQuitRequested = qfalse;
+		Com_Quit_f();
+	}
+
+	Com_Frame();
+}
+#endif
+
 /*
 =================
 Sys_SetBinaryPath
@@ -888,7 +915,7 @@ int main( int argc, char **argv )
 	signal( SIGINT, Sys_SigHandler );
 
 #ifdef __EMSCRIPTEN__
-	emscripten_set_main_loop( Com_Frame, 0, 1 );
+	emscripten_set_main_loop( Sys_WebMainLoop, 0, 1 );
 #else
 	while( 1 )
 	{
