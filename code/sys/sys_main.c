@@ -74,12 +74,6 @@ static void Sys_WebMainLoop( void )
 	if( webQuitRequested )
 	{
 		webQuitRequested = qfalse;
-		/*
-		 * emscripten_set_main_loop retains the JavaScript runtime.  Drop that
-		 * keepalive before the normal exit path, otherwise exit(0) returns from
-		 * this callback without delivering Module.onExit to the embedding host.
-		 */
-		emscripten_cancel_main_loop();
 		Com_Quit_f();
 	}
 
@@ -335,6 +329,19 @@ Single exit point (regular exit or in case of error)
 */
 static Q_NO_RETURN void Sys_Exit( int exitCode )
 {
+#ifdef __EMSCRIPTEN__
+	/*
+	 * emscripten_set_main_loop retains the JavaScript runtime, and exit() with
+	 * that keepalive held does not deliver Module.onExit: it sets the status,
+	 * throws, and unwinds out of the main-loop callback.  The embedding host is
+	 * then left believing a dead engine is still running.  This is the engine's
+	 * single exit point, so dropping the keepalive here covers every way out --
+	 * the host's quit request, the in-game and main menus' "EXIT GAME", the
+	 * console's quit command and a fatal error alike.
+	 */
+	emscripten_cancel_main_loop();
+#endif
+
 	CON_Shutdown( );
 
 #ifndef DEDICATED
