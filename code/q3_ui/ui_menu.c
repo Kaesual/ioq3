@@ -80,7 +80,11 @@ static void MainMenu_ExitAction( qboolean result ) {
 		return;
 	}
 	UI_PopMenu();
-	UI_CreditMenu();
+	// The same exit as the in-game menu's, and it is changed for the same
+	// reason; see InGame_QuitAction.  Both call sites are changed together
+	// because leaving one would keep the behaviour reachable through the menu
+	// a disconnected player is already standing in.
+	trap_Cmd_ExecuteText( EXEC_APPEND, "quit\n" );
 }
 
 

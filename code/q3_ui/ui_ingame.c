@@ -92,7 +92,12 @@ static void InGame_QuitAction( qboolean result ) {
 		return;
 	}
 	UI_PopMenu();
-	UI_CreditMenu();
+	// Quit rather than open UI_CreditMenu.  The credits screen reaches "quit"
+	// only from its own key handler, and only on the second key, so a player
+	// who has already answered "EXIT GAME?" is left looking at a screen that
+	// reads as the game having refused.  Where this client is embedded the
+	// host owns what follows an exit, so the engine's job here is to finish.
+	trap_Cmd_ExecuteText( EXEC_APPEND, "quit\n" );
 }
 
 
